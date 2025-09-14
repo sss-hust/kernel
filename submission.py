@@ -155,9 +155,8 @@ class OptimizedAllToAll:
         # Apply weights
         weighted_recv_buf = recv_buf.to(torch.float32) * w
 
-        # Use scatter_add_ for a parallel sum into the output tensor
-        output.scatter_add_(0, src_token_indices.unsqueeze(
-            1).expand(-1, cfg.hidden_dim), weighted_recv_buf)
+        # Use index_add_ for potentially better memory access patterns
+        output.index_add_(0, src_token_indices, weighted_recv_buf)
 
         return output.to(cfg.out_dtype)
 
