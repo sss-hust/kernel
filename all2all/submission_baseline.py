@@ -66,32 +66,35 @@ class OptimizedAllToAll:
 
         send_meta_buf = meta_to_send[perm]
 
-        # Allocate receive buffers
-        total_recv = int(recv_counts.sum().item())
-        recv_buf = torch.empty(total_recv, cfg.hidden_dim,
-                               dtype=cfg.in_dtype, device=device)
-        recv_meta_buf = torch.empty(
-            total_recv, self.META_DIM, dtype=torch.int32, device=device)
+        # OPTIMIZATION: Merge data and metadata communication
+        # Pack data and metadata into a single tensor to reduce communication rounds
+        total_tokens = send_buf.shape[0]
+        packed_dim = cfg.hidden_dim + self.META_DIM
 
-        # Perform all-to-all communication for data
+        # Create packed send buffer: [data, meta_as_float]
+        packed_send_buf = torch.empty(total_tokens, packed_dim,
+                                      dtype=cfg.in_dtype, device=device)
+        packed_send_buf[:, :cfg.hidden_dim] = send_buf
+        packed_send_buf[:, cfg.hidden_dim:] = send_meta_buf.to(cfg.in_dtype)
+
+        # Allocate packed receive buffer
+        total_recv = int(recv_counts.sum().item())
+        packed_recv_buf = torch.empty(total_recv, packed_dim,
+                                      dtype=cfg.in_dtype, device=device)
+
+        # Single all-to-all communication for both data and metadata
         dist.all_to_all_single(
-            recv_buf,
-            send_buf,
+            packed_recv_buf,
+            packed_send_buf,
             output_split_sizes=recv_counts.tolist(),
             input_split_sizes=send_counts.tolist(),
         )
 
-        # Perform all-to-all communication for metadata
-        dist.all_to_all_single(
-            recv_meta_buf.view(-1),
-            send_meta_buf.view(-1),
-            output_split_sizes=[
-                c * self.META_DIM for c in recv_counts.tolist()],
-            input_split_sizes=[
-                c * self.META_DIM for c in send_counts.tolist()],
-        )
+        # Unpack received data and metadata
+        recv_buf = packed_recv_buf[:, :cfg.hidden_dim]
+        recv_meta_buf = packed_recv_buf[:, cfg.hidden_dim:].to(torch.int32)
 
-        return recv_buf, recv_meta_buf.view(-1, self.META_DIM)
+        return recv_buf, recv_meta_buf
 
     def combine(self, expert_y: torch.Tensor, meta: torch.Tensor, weights: torch.Tensor):
         device = expert_y.device
@@ -115,30 +118,33 @@ class OptimizedAllToAll:
         send_buf = expert_y[perm]
         send_meta_buf = meta[perm]
 
-        # Allocate receive buffers
-        total_recv = int(recv_counts.sum().item())
-        recv_buf = torch.empty(total_recv, cfg.hidden_dim,
-                               dtype=cfg.out_dtype, device=device)
-        recv_meta_buf = torch.empty(
-            total_recv, self.META_DIM, dtype=torch.int32, device=device)
+        # OPTIMIZATION: Merge data and metadata communication
+        # Pack expert output and metadata into a single tensor
+        total_tokens = send_buf.shape[0]
+        packed_dim = cfg.hidden_dim + self.META_DIM
 
-        # Perform all-to-all communication
+        # Create packed send buffer: [expert_output, meta_as_float]
+        packed_send_buf = torch.empty(total_tokens, packed_dim,
+                                      dtype=cfg.out_dtype, device=device)
+        packed_send_buf[:, :cfg.hidden_dim] = send_buf
+        packed_send_buf[:, cfg.hidden_dim:] = send_meta_buf.to(cfg.out_dtype)
+
+        # Allocate packed receive buffer
+        total_recv = int(recv_counts.sum().item())
+        packed_recv_buf = torch.empty(total_recv, packed_dim,
+                                      dtype=cfg.out_dtype, device=device)
+
+        # Single all-to-all communication for both data and metadata
         dist.all_to_all_single(
-            recv_buf,
-            send_buf,
+            packed_recv_buf,
+            packed_send_buf,
             output_split_sizes=recv_counts.tolist(),
             input_split_sizes=send_counts.tolist(),
         )
-        dist.all_to_all_single(
-            recv_meta_buf.view(-1),
-            send_meta_buf.view(-1),
-            output_split_sizes=[
-                c * self.META_DIM for c in recv_counts.tolist()],
-            input_split_sizes=[
-                c * self.META_DIM for c in send_counts.tolist()],
-        )
 
-        recv_meta_buf = recv_meta_buf.view(-1, self.META_DIM)
+        # Unpack received data and metadata
+        recv_buf = packed_recv_buf[:, :cfg.hidden_dim]
+        recv_meta_buf = packed_recv_buf[:, cfg.hidden_dim:].to(torch.int32)
 
         # Vectorized weighted sum using scatter_add_
         # This is the key optimization for the combine step
