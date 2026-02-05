@@ -30,6 +30,7 @@ class RankTestData:
         self.indices = torch.empty(
             self.num_tokens, cfg.experts_per_token, dtype=torch.int32, device=device
         )
+        # 模拟随机路由
         for i in range(self.num_tokens):
             perm = torch.randperm(cfg.num_experts, generator=rng, device=device)
             self.indices[i] = perm[: cfg.experts_per_token]
@@ -90,6 +91,7 @@ class PyTorchAllToAll:
         recv_counts_t = torch.empty(self.world_size, dtype=torch.long, device=device)
         dist.all_to_all_single(recv_counts_t, send_counts_t)
         # ---------2. send and recv buffer, order by tokens on each rank ----------
+        # cat内部把dp_x按照token_map的顺序拼接起来,然后按行切割变成符合all2all通信的连续内存块
         send_buf = torch.cat([dp_x[idx_list] for idx_list in token_map], dim=0)
         total_recv = int(recv_counts_t.sum().item())
         recv_buf = torch.empty(

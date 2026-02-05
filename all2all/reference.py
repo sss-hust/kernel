@@ -30,6 +30,7 @@ class RankTestData:
         self.indices = torch.empty(
             self.num_tokens, cfg.experts_per_token, dtype=torch.int32, device=device
         )
+        # 模拟随机路由
         for i in range(self.num_tokens):
             perm = torch.randperm(
                 cfg.num_experts, generator=rng, device=device)
