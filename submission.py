@@ -60,6 +60,10 @@ class VectorizedAllToAll:
         
         # 2. Count tokens per destination rank using scatter_add / 使用 scatter_add 统计每个目标 Rank 的数据量
         send_counts = torch.zeros(self.world_size, dtype=torch.long, device=device)
+        # dest.scatter_add_(dim,index,src)
+        # index.shape == src.shape
+        # index.shape[dim] <= dest.shape[dim]
+        # dest[index[i][j][k]][j][k] += src
         send_counts.scatter_add_(0, dst_ranks.long(), torch.ones(N * K, dtype=torch.long, device=device))
         
         # Exchange counts / 交换计数，告知对方要发多少数据

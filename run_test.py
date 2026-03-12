@@ -11,6 +11,8 @@
     python run_test.py --world-size 4   # 指定 GPU 数量
     python run_test.py --gpus 6,7       # 指定使用的 GPU
     python run_test.py --info           # 查看设备信息
+    python run_test.py --mode benchmark --gpus 0,1,2,3 --module submission_ring_shm
+
 """
 import argparse
 import sys
@@ -56,6 +58,7 @@ def main():
   python run_test.py --mode benchmark   # 只测性能
   python run_test.py --quick            # 快速模式
   python run_test.py -w 4               # 使用4个GPU
+  python run_test.py --module submission_ring_shm  # 指定测试特定模块
   python run_test.py --gpus 0,1,2,3     # 指定GPU
   python run_test.py --info             # 查看设备信息
         """
@@ -86,6 +89,13 @@ def main():
         '--quick', '-q',
         action='store_true',
         help='快速测试模式（减少测试用例）'
+    )
+    
+    parser.add_argument(
+        '--module',
+        type=str,
+        default='submission',
+        help='指定评测的模块名称 (默认: submission)'
     )
     
     parser.add_argument(
@@ -160,11 +170,11 @@ def main():
     
     # 运行测试
     if args.mode in ['all', 'test']:
-        passed = run_tests(test_cases, world_size=world_size)
+        passed = run_tests(test_cases, world_size=world_size, submission_module=args.module)
         success = success and passed
     
     if args.mode in ['all', 'benchmark']:
-        results = run_benchmarks(benchmark_cases, world_size=world_size)
+        results = run_benchmarks(benchmark_cases, world_size=world_size, submission_module=args.module)
         # 检查是否有失败的基准测试
         if any(r is None for r in results):
             success = False

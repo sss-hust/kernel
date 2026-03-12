@@ -72,20 +72,26 @@ class PyTorchAllToAll:
 
         # ---------1. get counts of send and recv for each rank -----------
         # 1.1 token nums to send to each rank
+        # 待发送数组
         send_counts = [0] * self.world_size
         # 1.2 token id to send to each rank
         token_map = [[] for _ in range(self.world_size)]
         # 1.3 token meta data, need update for combine
         meta_map = [[] for _ in range(self.world_size)]
+        # 取出每个token对应得专家列表
         for t, expert_list in enumerate(indices.tolist()):
+            # 取出每一个专家序号
             for k, e in enumerate(expert_list):
                 dst_rank = e // self.num_local_experts
+                # 发送加一
                 send_counts[dst_rank] += 1
+                # 发送的token对应token号
                 token_map[dst_rank].append(t)
+                # 记录元数据
                 meta_map[dst_rank].extend(
                     [e, self.rank, t, k, 0]
                 )  # srcGobalExpert, srcRank, srcIndex, expert index
-
+        # 转为tensor
         send_counts_t = torch.tensor(send_counts, dtype=torch.long, device=device)
         # 1.3 token nums to recv from each rank
         recv_counts_t = torch.empty(self.world_size, dtype=torch.long, device=device)
@@ -120,6 +126,8 @@ class PyTorchAllToAll:
             input_split_sizes=[c * self.META_DIM for c in send_counts_t.tolist()],
         )
         recv_meta = recv_meta.view(-1, self.META_DIM)
+        # 之前已经收到了来自各个rank的token,都塞在了recv_buf和recv_meta中
+        # 但是乱序的，没有按专家组织的，所以需要重新组织
         # ---------4. define output tensor of dispatch ------------
         # 4.1 num tokens per expert
         expert_num_tokens = torch.zeros(
@@ -140,13 +148,15 @@ class PyTorchAllToAll:
         # ---------6. write tokens to each expert on each rank ------
         # 6.1 fetch the local expert id of corresponding token i
         for i in range(total_recv):
+            # 遍历每一个收到的token,找到它所属的专家
             global_eid = int(recv_meta[i, 0].item())
             local_eid = global_eid % self.num_local_experts
-            # output, store token buf and token meta and token nums of each expert
+            # 专家对应的token缓冲池直接读入数据，meta同理
             expert_x[local_eid, expert_num_tokens[local_eid]] = recv_buf[i]
             expert_meta[local_eid, expert_num_tokens[local_eid]] = recv_meta[i]
             expert_num_tokens[local_eid] += 1
         # 6.2 after dispatch, token nums and token and meta of token on expert
+        # 返回值的shape是(num_local_experts, max_num_tokens, token_dim)
         return expert_num_tokens, expert_x, expert_meta
 
     # ---------- combine ----------
@@ -155,9 +165,10 @@ class PyTorchAllToAll:
         out_tokens: torch.Tensor,  # output, (max num tokens, token dim)
         weights: torch.Tensor,  # topk weight
         expert_meta: torch.Tensor,  # input
-        expert_y: torch.Tensor,  # input, (num_local_experts, max_num_tokens * num_dp, token_dim)
+        expert_y: torch.Tensor,  # input, (num_local_experts, max_num_tokens , token_dim)
         expert_num_tokens: torch.Tensor,
     ):  # input
+        # 进入之前，每一个token都在当前rank上计算过了，但未乘权重
         device = out_tokens.device
         cfg = self.cfg
 
@@ -169,14 +180,19 @@ class PyTorchAllToAll:
         meta_map = [[] for _ in range(self.world_size)]
 
         # 2. traverse each token of each local expert of each rank, fill into send_counts and y_map and meta_map
+        # 遍历当前机器每一个专家
         for local_eid in range(self.num_local_experts):
+            # 专家对应的token数量
             cnt = int(expert_num_tokens[local_eid].item())
+            # 遍历专家对应的每一个token
             for j in range(cnt):
                 # meta info token j of local eid
                 meta = expert_meta[local_eid, j]
+                # token j所属的机器
                 dst_rank = int(meta[1].item())
+                # 发送token数量加一
                 send_counts[dst_rank] += 1
-                # token j and its meta that send back to dst rank/local eid
+                # token j和其meta信息
                 y_map[dst_rank].append(expert_y[local_eid, j].unsqueeze(0))
                 meta_map[dst_rank].extend(meta.tolist())
         # token nums that cur rank plan to send to other ranks
@@ -191,6 +207,7 @@ class PyTorchAllToAll:
             if sub_list:
                 y_map_tensors.append(torch.cat(sub_list, dim=0))
             else:
+                # 为了后续合并才引入空行
                 y_map_tensors.append(
                     torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device)
                 )

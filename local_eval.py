@@ -90,8 +90,12 @@ def wrap_check_implementation(data, submission_output):
 def _run_distributed_test(args):
     """在单个进程中运行分布式测试"""
     test_args, rank, world_size = args
+    test_args_copy = test_args.copy()
+    submission_module = test_args_copy.pop("submission_module", "submission")
     
-    from submission import custom_kernel
+    import importlib
+    sub_mod = importlib.import_module(submission_module)
+    custom_kernel = sub_mod.custom_kernel
     from reference import generate_input
     import torch.distributed as dist
     
@@ -107,7 +111,7 @@ def _run_distributed_test(args):
             device_id=torch.device(f'cuda:{rank}')
         )
         
-        data = generate_input(**test_args, rank=rank)
+        data = generate_input(**test_args_copy, rank=rank)
         torch.cuda.synchronize()
         submission_output = custom_kernel(_clone_data(data, rank))
         torch.cuda.synchronize()
@@ -120,8 +124,12 @@ def _run_distributed_test(args):
 def _run_distributed_benchmark(args):
     """在单个进程中运行分布式基准测试"""
     test_args, rank, world_size, max_repeats, max_time_ns = args
+    test_args_copy = test_args.copy()
+    submission_module = test_args_copy.pop("submission_module", "submission")
     
-    from submission import custom_kernel
+    import importlib
+    sub_mod = importlib.import_module(submission_module)
+    custom_kernel = sub_mod.custom_kernel
     from reference import generate_input
     import torch.distributed as dist
     
@@ -138,7 +146,7 @@ def _run_distributed_benchmark(args):
         )
         
         durations = []
-        data = generate_input(**test_args, rank=rank)
+        data = generate_input(**test_args_copy, rank=rank)
         check_copy = _clone_data(data, rank)
         
         # 正确性检查
@@ -264,7 +272,7 @@ class LocalEvaluator:
         return results[0]  # 返回 rank 0 的统计
 
 
-def run_tests(cases: list, world_size: int = None, verbose: bool = True) -> bool:
+def run_tests(cases: list, world_size: int = None, verbose: bool = True, submission_module: str = 'submission') -> bool:
     """
     运行所有测试用例
     
@@ -272,6 +280,7 @@ def run_tests(cases: list, world_size: int = None, verbose: bool = True) -> bool
         cases: TestCase 对象列表
         world_size: GPU 数量
         verbose: 是否打印详细信息
+        submission_module: 评测模块名
     
     Returns:
         是否全部通过
@@ -289,6 +298,7 @@ def run_tests(cases: list, world_size: int = None, verbose: bool = True) -> bool
             "hidden_dim": case.hidden_dim,
             "max_num_tokens": case.max_num_tokens,
             "seed": case.seed,
+            "submission_module": submission_module,
         }
         
         if verbose:
@@ -319,7 +329,7 @@ def run_tests(cases: list, world_size: int = None, verbose: bool = True) -> bool
     return all_passed
 
 
-def run_benchmarks(cases: list, world_size: int = None, verbose: bool = True) -> list:
+def run_benchmarks(cases: list, world_size: int = None, verbose: bool = True, submission_module: str = 'submission') -> list:
     """
     运行所有基准测试
     
@@ -327,6 +337,7 @@ def run_benchmarks(cases: list, world_size: int = None, verbose: bool = True) ->
         cases: TestCase 对象列表
         world_size: GPU 数量
         verbose: 是否打印详细信息
+        submission_module: 评测模块名
     
     Returns:
         Stats 对象列表
@@ -348,6 +359,7 @@ def run_benchmarks(cases: list, world_size: int = None, verbose: bool = True) ->
             "hidden_dim": cases[0].hidden_dim,
             "max_num_tokens": cases[0].max_num_tokens,
             "seed": cases[0].seed,
+            "submission_module": submission_module,
         }
         evaluator.run_benchmark(warm_args, max_repeats=10, max_time_ns=1e8)
         print("Done")
@@ -359,6 +371,7 @@ def run_benchmarks(cases: list, world_size: int = None, verbose: bool = True) ->
             "hidden_dim": case.hidden_dim,
             "max_num_tokens": case.max_num_tokens,
             "seed": case.seed,
+            "submission_module": submission_module,
         }
         
         if verbose:
